@@ -1,0 +1,93 @@
+name: Generate RSS Feed
+
+on:
+  schedule:
+    - cron: '10 1 * * *'  # UTC 01:10 → JST 10:10
+  workflow_dispatch:  # 手動実行用
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4
+
+      - name: Fetch JSON Data
+        run: |
+          curl -sL "https://kosodate-green.mlit.go.jp/assets/data/news.json" -o news.json
+
+      - name: Extract and Filter Recent News
+        run: |
+          TODAY=$(date -u +"%Y-%m-%d")
+          DATE_LIMIT=$(date -u -d "-14 days" +"%Y-%m-%d")
+
+          cat news.json | jq -r --arg DATE_LIMIT "$DATE_LIMIT" '
+            .list | map(select(.date >= $DATE_LIMIT)) |
+            map({
+              title: .title,
+              url: .url,
+              date: .date
+            })' > filtered_news.json
+
+      - name: Generate RSS Feed
+        run: |
+          RSS_FILE="rss.xml"
+          PUB_DATE=$(date -R)
+          echo '<?xml version="1.0" encoding="UTF-8"?>' > $RSS_FILE
+          echo '<rss version="2.0">' >> $RSS_FILE
+          echo '<channel>' >> $RSS_FILE
+          echo '<title>子育てグリーン住宅支援事業 - 新着情報</title>' >> $RSS_FILE
+          echo '<link>https://Sudanie2.github.io/Green-rss/rss.xml</link>' >> $RSS_FILE
+          echo '<description>最新の子育てグリーン住宅支援情報を提供</description>' >> $RSS_FILE
+          echo "<pubDate>$PUB_DATE</pubDate>" >> $RSS_FILE
+
+          jq -c '.[]' filtered_news.json | while read item; do
+            TITLE=$(echo "$item" | jq -r '.title')
+            LINK=$(echo "$item" | jq -r '.url')
+            DATE=$(echo "$item" | jq -r '.date')
+            GUID=$(echo "$DATE-$TITLE" | sha256sum | cut -d ' ' -f1)
+            ISO_DATE=$(date -d "$DATE" --rfc-2822)
+
+            echo "<item>" >> $RSS_FILE
+            echo "<title>$TITLE</title>" >> $RSS_FILE
+            echo "<link>$LINK</link>" >> $RSS_FILE
+            echo "<guid isPermaLink=\"false\">$GUID</guid>" >> $RSS_FILE
+            echo "<pubDate>$ISO_DATE</pubDate>" >> $RSS_FILE
+            echo "</item>" >> $RSS_FILE
+          done
+
+          echo '</channel>' >> $RSS_FILE
+          echo '</rss>' >> $RSS_FILE
+
+      - name: Check for Changes
+        id: git_diff
+        run: |
+          git add rss.xml
+          if git diff --staged --quiet; then
+            echo "No changes to commit"
+            echo "changed=false" >> $GITHUB_ENV
+          else
+            echo "Changes detected"
+            echo "changed=true" >> $GITHUB_ENV
+          fi
+
+      - name: Commit and Push Changes
+        if: env.changed == 'true'
+        run: |
+          git config --global user.name "github-actions"
+          git config --global user.email "github-actions@github.com"
+          git commit -m "Update RSS feed" rss.xml
+          git push
+
+      - name: Deploy to GitHub Pages
+        if: env.changed == 'true'
+        run: |
+          mkdir -p public
+          mv rss.xml public/
+          touch public/.nojekyll
+          echo "https://Sudanie2.github.io/Green-rss/rss.xml" > public/CNAME
+          git add public
+          git commit -m "Deploy RSS feed to GitHub Pages"
+          git push
+
