@@ -2,52 +2,77 @@ name: Generate RSS Feed
 
 on:
   schedule:
-    - cron: '10 1 * * *'  # 日本時間 10:10 (UTC 1:10)
-  workflow_dispatch:  # 手動実行も可能
+    - cron: "10 1 * * *" # UTC 01:10 = JST 10:10
+  workflow_dispatch: # 手動実行も可能
 
 jobs:
   build:
     runs-on: ubuntu-latest
+
     steps:
       - name: Checkout repo
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 # 履歴をすべて取得
+
+      - name: Install dependencies
+        run: sudo apt-get install -y jq
+
+      - name: Fetch previous RSS file
+        run: |
+          if [ -f rss.xml ]; then
+            cp rss.xml previous_rss.xml
+          else
+            touch previous_rss.xml
+          fi
 
       - name: Fetch JSON and Convert to RSS
         run: |
-          # 最新の JSON を取得
+          # 最新のJSONを取得
           curl -sL "https://kosodate-green.mlit.go.jp/assets/data/news.json" -o news.json
 
-          # RSS フィードのヘッダーを作成
-          echo '<?xml version="1.0" encoding="UTF-8"?>' > rss.xml
-          echo '<rss version="2.0">' >> rss.xml
-          echo '<channel>' >> rss.xml
-          echo '  <title>子育てグリーン住宅支援事業 新着情報</title>' >> rss.xml
-          echo '  <link>https://kosodate-green.mlit.go.jp/</link>' >> rss.xml
-          echo '  <description>最新のニュースを提供します</description>' >> rss.xml
-          echo '  <language>ja</language>' >> rss.xml
-          
-          # JSON から各ニュース記事を RSS アイテムとして追加
-          jq -c '.[]' news.json | while read item; do
-            title=$(echo $item | jq -r '.title')
-            link=$(echo $item | jq -r '.url')
+          # RSS ヘッダー作成
+          echo '<?xml version="1.0" encoding="UTF-8"?>' > new_rss.xml
+          echo '<rss version="2.0"><channel>' >> new_rss.xml
+          echo '<title>子育てグリーン住宅支援事業 新着情報</title>' >> new_rss.xml
+          echo '<link>https://kosodate-green.mlit.go.jp/</link>' >> new_rss.xml
+          echo '<description>最新のニュースを提供します</description>' >> new_rss.xml
+          echo '<language>ja</language>' >> new_rss.xml
+
+          # JSON から RSS アイテムを作成
+          cat news.json | jq -c '.[]' | while read item; do
+            title=$(echo $item | jq -r '.title | @html')
+            link=$(echo $item | jq -r '.url | @html')
             pubDate=$(echo $item | jq -r '.date' | xargs -I {} date -d {} -R) # RFC 2822 形式
             guid=$(echo $link | md5sum | awk '{print $1}') # URL の MD5 ハッシュで一意の ID を生成
 
-            echo '  <item>' >> rss.xml
-            echo "    <title>${title}</title>" >> rss.xml
-            echo "    <link>${link}</link>" >> rss.xml
-            echo "    <guid isPermaLink=\"false\">${guid}</guid>" >> rss.xml
-            echo "    <pubDate>${pubDate}</pubDate>" >> rss.xml
-            echo '  </item>' >> rss.xml
+            echo "<item>" >> new_rss.xml
+            echo "  <title>${title}</title>" >> new_rss.xml
+            echo "  <link>${link}</link>" >> new_rss.xml
+            echo "  <guid isPermaLink=\"false\">${guid}</guid>" >> new_rss.xml
+            echo "  <pubDate>${pubDate}</pubDate>" >> new_rss.xml
+            echo "</item>" >> new_rss.xml
           done
 
-          echo '</channel>' >> rss.xml
-          echo '</rss>' >> rss.xml
+          echo '</channel></rss>' >> new_rss.xml
 
-      - name: Commit and Push RSS Feed
+      - name: Merge new items with previous RSS
         run: |
+          if cmp -s new_rss.xml previous_rss.xml; then
+            echo "No changes in RSS feed. Skipping commit."
+            exit 0
+          else
+            mv new_rss.xml rss.xml
+          fi
+
+      - name: Commit and Push RSS
+        run: |
+          if git diff --quiet rss.xml; then
+            echo "No changes in rss.xml. Skipping commit."
+            exit 0
+          fi
           git config --global user.name "github-actions"
           git config --global user.email "github-actions@github.com"
-          git add rss.xml .nojekyll
-          git commit -m "Update RSS feed" || echo "No changes to commit"
-          git push origin main
+          git add rss.xml
+          git commit -m "Updated RSS feed"
+          git push
