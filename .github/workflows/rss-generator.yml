@@ -1,145 +1,116 @@
-name: Generate and Publish RSS Feed
+name: Generate RSS Feed
+
+# 日本時間10:10に合わせてスケジュール実行する場合は
+# UTCで 1:10 (AM) に設定（JST は UTC+9）
 on:
   schedule:
-    # Run at 10:10 AM Japan time (01:10 UTC)
     - cron: '10 1 * * *'
-  workflow_dispatch:  # Allow manual triggering
-
-permissions:
-  contents: write
-  pages: write
-  id-token: write
+  workflow_dispatch:
 
 jobs:
-  generate:
+  build:
     runs-on: ubuntu-latest
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
-        
-      - name: Set up environment
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y jq curl
 
-      - name: Download JSON and Generate RSS
+    steps:
+      # リポジトリをチェックアウト
+      - name: Check out repo
+        uses: actions/checkout@v3
+
+      # JSONを取得し、RSSを生成
+      - name: Generate RSS
         run: |
-          # Download the JSON file
-          curl -s https://kosodate-green.mlit.go.jp/assets/data/news.json > news.json
-          
-          # Debug - Check JSON content
-          echo "JSON content:"
-          cat news.json
-          
-          # Get current date in RFC 2822 format for the feed
-          BUILD_DATE=$(date -R)
-          
-          # Calculate date 14 days ago in YYYY/MM/DD format for filtering
-          FOURTEEN_DAYS_AGO=$(date -d "14 days ago" +"%Y/%m/%d")
-          echo "Filtering entries from ${FOURTEEN_DAYS_AGO}"
-          
-          # Create RSS file header
-          cat > rss.xml << EOF
-<?xml version="1.0" encoding="UTF-8"?>
-<rss version="2.0" xmlns:atom="http://www.w3.org/2005/Atom">
-<channel>
-    <title>子育てグリーン住宅支援事業 新着情報</title>
-    <link>https://kosodate-green.mlit.go.jp/</link>
-    <description>子育てグリーン住宅支援事業のホームページの新着情報</description>
-    <language>ja-jp</language>
-    <lastBuildDate>${BUILD_DATE}</lastBuildDate>
-    <atom:link href="https://${GITHUB_REPOSITORY_OWNER}.github.io/Green-rss/rss.xml" rel="self" type="application/rss+xml" />
-EOF
-          
-          # Process JSON and append items to RSS - with debugging
-          echo "Processing JSON entries:"
-          
-          # First check if we can parse the JSON properly
-          if ! jq -e '.list' news.json > /dev/null; then
-            echo "Error: Could not parse JSON or 'list' field not found"
-            cat news.json
-            exit 1
+          set -eux
+
+          # リポジトリ直下に docs ディレクトリがなければ作成
+          mkdir -p docs
+
+          # 既存のrss.xmlがあればバックアップを取る
+          if [ -f docs/rss.xml ]; then
+            mv docs/rss.xml docs/rss_old.xml
           fi
-          
-          # Get entries and display for debugging
-          ENTRIES=$(jq -r '.list[] | select(.date >= "'${FOURTEEN_DAYS_AGO}'") | [.id, .title, .date, .url] | @tsv' news.json)
-          echo "Filtered entries:"
-          echo "$ENTRIES"
-          
-          echo "$ENTRIES" | while IFS=$'\t' read -r id title date url; do
-            echo "Processing: ID=$id, Title=$title, Date=$date, URL=$url"
-            
-            # Skip items with empty URL
-            if [ -z "$url" ] || [ "$url" = "null" ]; then
-              url="https://kosodate-green.mlit.go.jp/"
-              echo "Empty URL, using default: $url"
-            fi
-            
-            # Convert date to RFC 2822 format for RSS
-            rfc_date=$(date -R -d "${date}")
-            echo "Converted date: $rfc_date"
-            
-            # Create item entry
-            cat >> rss.xml << EOF
-    <item>
-        <title>${title}</title>
-        <link>${url}</link>
-        <guid isPermaLink="false">${id}</guid>
-        <pubDate>${rfc_date}</pubDate>
-        <description>${title}</description>
-    </item>
+
+          # JSONファイルを取得
+          curl -s https://kosodate-green.mlit.go.jp/assets/data/news.json -o news.json
+
+          # 今のUNIXタイムスタンプ
+          NOW=$(date +%s)
+          # 14日(=1209600秒)前のUNIXタイムスタンプ
+          TWO_WEEKS_AGO=$(( NOW - 1209600 ))
+
+          # いったん空の items.rss を作っておく
+          : > items.rss
+
+          # JSONの配列長を取得
+          length=$(jq '.list | length' news.json)
+
+          # 各要素をループして14日以内のものだけ抽出
+          for i in $(seq 0 $((length - 1))); do
+            # i番目のオブジェクト
+            item=$(jq -r ".list[$i]" news.json)
+
+            title=$(echo "$item" | jq -r '.title')
+            url=$(echo "$item"   | jq -r '.url')
+            date_str=$(echo "$item" | jq -r '.date')
+            id=$(echo "$item"    | jq -r '.id')
+
+            # date_str (例: "2025/03/10") を "2025-03-10" に置換
+            date_fmt=$(echo "$date_str" | sed 's/\//-/g')
+            # UNIXタイムに変換
+            epoch=$(date -d "$date_fmt" +%s)
+
+            # 14日以内(または当日含む)の場合のみRSSに入れる
+            if [ $epoch -ge $TWO_WEEKS_AGO ]; then
+              # RFC 2822形式の日付文字列を作成
+              pub_date=$(date -R -d "$date_fmt")
+
+              # RSSの<item>部分を追加
+              cat <<EOF >> items.rss
+<item>
+  <title>${title}</title>
+  <link>${url}</link>
+  <guid isPermaLink="false">${id}</guid>
+  <pubDate>${pub_date}</pubDate>
+</item>
 EOF
+            fi
           done
-          
-          # Close RSS file
-          cat >> rss.xml << EOF
+
+          # RSS本体の生成
+          # Feedly が認識できるように <lastBuildDate> や <pubDate> を適切に設定
+          cat <<EOF > docs/rss.xml
+<?xml version="1.0" encoding="UTF-8"?>
+<rss version="2.0">
+<channel>
+  <title>子育てグリーン住宅支援事業 最新情報</title>
+  <link>https://your-github-pages-url.example</link>
+  <description>子育てグリーン住宅支援事業の新着情報をRSSフィードで提供</description>
+  <lastBuildDate>$(date -R)</lastBuildDate>
+  <pubDate>$(date -R)</pubDate>
+  <ttl>1800</ttl>
+$(cat items.rss)
 </channel>
 </rss>
 EOF
-          
-          echo "Generated RSS content:"
-          cat rss.xml
 
-      - name: Configure Git
-        run: |
-          git config user.name "GitHub Actions Bot"
-          git config user.email "actions@github.com"
+          # 旧ファイルとの差分をチェック
+          if [ -f docs/rss_old.xml ]; then
+            if diff docs/rss_old.xml docs/rss.xml > /dev/null; then
+              echo "No changes in rss.xml. Skipping commit."
+              exit 0
+            fi
+          fi
 
-      - name: Commit and push
-        run: |
-          git add rss.xml
-          git status
-          
-          # Force commit even if there are no changes
-          git commit -m "Update RSS feed [skip ci]" || echo "No changes to commit"
-          git push || echo "No changes to push"
+          # 変更があればコミット＆プッシュ
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add docs/rss.xml
+          git commit -m "Update RSS feed"
+          git push origin main
 
-  deploy:
-    needs: generate
-    environment:
-      name: github-pages
-      url: ${{ steps.deployment.outputs.page_url }}
-    runs-on: ubuntu-latest
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-      
-      - name: Setup Pages
-        uses: actions/configure-pages@v4
-        
-      - name: Create _headers file for correct MIME type
-        run: |
-          mkdir -p _site
-          echo "/rss.xml" > _site/_headers
-          echo "  Content-Type: application/rss+xml; charset=utf-8" >> _site/_headers
-          cp rss.xml _site/ || echo "rss.xml not found"
-          ls -la
-          
-      - name: Upload artifact
-        uses: actions/upload-pages-artifact@v3
+      # 生成物をアーティファクトとしてアップロード（任意）
+      - name: Upload rss.xml artifact
+        if: always()
+        uses: actions/upload-artifact@v2
         with:
-          path: '_site'
-          
-      - name: Deploy to GitHub Pages
-        id: deployment
-        uses: actions/deploy-pages@v4
+          name: rss.xml
+          path: docs/rss.xml
