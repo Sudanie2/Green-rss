@@ -2,44 +2,68 @@ name: Generate RSS Feed
 
 on:
   schedule:
-    - cron: '10 1 * * *' # 日本時間10:10に実行（UTC 01:10）
-  workflow_dispatch:
+    - cron: "10 1 * * *" # UTC 01:10 = JST 10:10
+  workflow_dispatch: # 手動実行も可能
 
 jobs:
   build:
     runs-on: ubuntu-latest
+
     steps:
-      - name: Checkout repository
+      - name: Checkout repo
         uses: actions/checkout@v4
 
-      - name: Fetch JSON data
-        run: |
-          curl -s "https://kosodate-green.mlit.go.jp/assets/data/news.json" -o news.json
+      - name: Install dependencies
+        run: sudo apt-get install -y jq
 
-      - name: Process JSON and Generate RSS
+      - name: Fetch previous RSS file
         run: |
-          mkdir -p public
-          echo '<?xml version="1.0" encoding="UTF-8"?>' > public/rss.xml
-          echo '<rss version="2.0">' >> public/rss.xml
-          echo '<channel>' >> public/rss.xml
-          echo '<title>子育てグリーン住宅支援事業 RSS</title>' >> public/rss.xml
-          echo '<link>https://kosodate-green.mlit.go.jp/</link>' >> public/rss.xml
-          echo '<description>子育てグリーン住宅支援事業の最新情報</description>' >> public/rss.xml
-          
-          now=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
-          fourteen_days_ago=$(date -u -d "-14 days" +"%Y-%m-%d")
-          
-          cat news.json | jq -r --arg now "$now" --arg cutoff "$fourteen_days_ago" '.list[] | select(.date >= $cutoff) | "<item><title>" + .title + "</title><link>" + .url + "</link><guid isPermaLink=\"true\">" + .url + "</guid><pubDate>" + .date + "</pubDate></item>"' >> public/rss.xml
-          
-          echo '</channel>' >> public/rss.xml
-          echo '</rss>' >> public/rss.xml
+          if [ -f rss.xml ]; then
+            cp rss.xml previous_rss.xml
+          else
+            touch previous_rss.xml
+          fi
 
-      - name: Create .nojekyll file
+      - name: Fetch JSON and Convert to RSS
         run: |
-          touch public/.nojekyll
+          # 最新のJSONを取得
+          curl -o news.json https://kosodate-green.mlit.go.jp/assets/data/news.json
 
-      - name: Deploy to GitHub Pages
-        uses: peaceiris/actions-gh-pages@v3
-        with:
-          github_token: ${{ secrets.GITHUB_TOKEN }}
-          publish_dir: ./public
+          # 14日以内の記事を抽出
+          TODAY=$(date -u +"%Y-%m-%d")
+          FOURTEEN_DAYS_AGO=$(date -u -d "14 days ago" +"%Y-%m-%d")
+
+          echo '<?xml version="1.0" encoding="UTF-8"?>' > new_rss.xml
+          echo '<rss version="2.0"><channel>' >> new_rss.xml
+          echo '<title>子育てグリーン住宅支援事業ニュース</title>' >> new_rss.xml
+          echo '<link>https://kosodate-green.mlit.go.jp/</link>' >> new_rss.xml
+          echo '<description>子育てグリーン住宅支援事業の新着情報</description>' >> new_rss.xml
+
+          cat news.json | jq -r --arg start_date "$FOURTEEN_DAYS_AGO" --arg end_date "$TODAY" '
+            .list |
+            map(select(.date >= $start_date and .date <= $end_date)) |
+            .[] | 
+            "<item><title>\(.title | @html)</title><link>\(.url // "https://kosodate-green.mlit.go.jp/")</link><pubDate>\(.date)</pubDate></item>"' >> new_rss.xml
+
+          echo '</channel></rss>' >> new_rss.xml
+
+      - name: Merge new items with previous RSS
+        run: |
+          if cmp -s new_rss.xml previous_rss.xml; then
+            echo "No changes in RSS feed. Skipping commit."
+            exit 0
+          else
+            mv new_rss.xml rss.xml
+          fi
+
+      - name: Commit and Push RSS
+        run: |
+          if git diff --quiet rss.xml; then
+            echo "No changes in rss.xml. Skipping commit."
+            exit 0
+          fi
+          git config --global user.name "github-actions"
+          git config --global user.email "github-actions@github.com"
+          git add rss.xml
+          git commit -m "Updated RSS feed"
+          git push
