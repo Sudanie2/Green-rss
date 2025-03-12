@@ -1,80 +1,53 @@
-name: Generate RSS Feed for Green Housing Support
+name: Generate RSS Feed
 
 on:
   schedule:
-    - cron: "10 1 * * *" # 日本時間 10:10 (UTC 01:10)
-  workflow_dispatch: # 手動実行も可能
+    - cron: '10 1 * * *'  # 日本時間 10:10 (UTC 1:10)
+  workflow_dispatch:  # 手動実行も可能
 
 jobs:
   build:
     runs-on: ubuntu-latest
-
     steps:
       - name: Checkout repo
         uses: actions/checkout@v4
 
-      - name: Install dependencies
-        run: sudo apt-get install -y jq
-
-      - name: Fetch previous RSS file
-        run: |
-          if [ -f rss.xml ]; then
-            cp rss.xml previous_rss.xml
-          else
-            touch previous_rss.xml
-          fi
-
       - name: Fetch JSON and Convert to RSS
         run: |
-          # 最新のJSONを取得
-          curl -o news.json https://kosodate-green.mlit.go.jp/assets/data/news.json
+          # 最新の JSON を取得
+          curl -sL "https://kosodate-green.mlit.go.jp/assets/data/news.json" -o news.json
 
-          # 14日以内の記事を抽出
-          BASE_URL="https://kosodate-green.mlit.go.jp"
-          TODAY=$(date -u +"%Y-%m-%d")
-          FOURTEEN_DAYS_AGO=$(date -u -d "14 days ago" +"%Y-%m-%d")
+          # RSS フィードのヘッダーを作成
+          echo '<?xml version="1.0" encoding="UTF-8"?>' > rss.xml
+          echo '<rss version="2.0">' >> rss.xml
+          echo '<channel>' >> rss.xml
+          echo '  <title>子育てグリーン住宅支援事業 新着情報</title>' >> rss.xml
+          echo '  <link>https://kosodate-green.mlit.go.jp/</link>' >> rss.xml
+          echo '  <description>最新のニュースを提供します</description>' >> rss.xml
+          echo '  <language>ja</language>' >> rss.xml
+          
+          # JSON から各ニュース記事を RSS アイテムとして追加
+          jq -c '.[]' news.json | while read item; do
+            title=$(echo $item | jq -r '.title')
+            link=$(echo $item | jq -r '.url')
+            pubDate=$(echo $item | jq -r '.date' | xargs -I {} date -d {} -R) # RFC 2822 形式
+            guid=$(echo $link | md5sum | awk '{print $1}') # URL の MD5 ハッシュで一意の ID を生成
 
-          echo '<?xml version="1.0" encoding="UTF-8"?>' > new_rss.xml
-          echo '<rss version="2.0"><channel>' >> new_rss.xml
-          echo '<title>子育てグリーン住宅支援事業ニュース</title>' >> new_rss.xml
-          echo '<link>https://kosodate-green.mlit.go.jp/</link>' >> new_rss.xml
-          echo '<description>子育てグリーン住宅支援事業の新着情報</description>' >> new_rss.xml
+            echo '  <item>' >> rss.xml
+            echo "    <title>${title}</title>" >> rss.xml
+            echo "    <link>${link}</link>" >> rss.xml
+            echo "    <guid isPermaLink=\"false\">${guid}</guid>" >> rss.xml
+            echo "    <pubDate>${pubDate}</pubDate>" >> rss.xml
+            echo '  </item>' >> rss.xml
+          done
 
-          cat news.json | jq -r --arg base_url "$BASE_URL" --arg start_date "$FOURTEEN_DAYS_AGO" --arg end_date "$TODAY" '
-            .list | map(select(.date | gsub("/"; "-") >= $start_date and .date | gsub("/"; "-") <= $end_date)) |
-            .[] | 
-            "<item><title>\(.title | @html)</title><link>" + 
-            (if .url == "" then $base_url else .url end) + 
-            "</link><pubDate>\(.date | gsub("/"; "-"))</pubDate></item>"' >> new_rss.xml
+          echo '</channel>' >> rss.xml
+          echo '</rss>' >> rss.xml
 
-          echo '</channel></rss>' >> new_rss.xml
-
-      - name: Ensure RSS file exists
+      - name: Commit and Push RSS Feed
         run: |
-          if [ ! -f new_rss.xml ]; then
-            echo "No new RSS data found, creating an empty RSS feed."
-            echo '<?xml version="1.0" encoding="UTF-8"?><rss version="2.0"><channel><title>子育てグリーン住宅支援事業ニュース</title><link>https://kosodate-green.mlit.go.jp/</link><description>子育てグリーン住宅支援事業の新着情報</description></channel></rss>' > new_rss.xml
-          fi
-
-      - name: Merge new items with previous RSS
-        run: |
-          mv new_rss.xml rss.xml
-
-      - name: Commit and Push RSS
-        run: |
-          if [ ! -f rss.xml ]; then
-            echo "rss.xml file is missing. Exiting."
-            exit 1
-          fi
-
           git config --global user.name "github-actions"
           git config --global user.email "github-actions@github.com"
-
-          if git diff --quiet rss.xml; then
-            echo "No changes in rss.xml. Skipping commit."
-            exit 0
-          fi
-
-          git add rss.xml
-          git commit -m "Updated RSS feed"
-          git push
+          git add rss.xml .nojekyll
+          git commit -m "Update RSS feed" || echo "No changes to commit"
+          git push origin main
