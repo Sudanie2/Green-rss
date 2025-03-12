@@ -31,8 +31,8 @@ jobs:
 
           # 14日以内の記事を抽出
           BASE_URL="https://kosodate-green.mlit.go.jp"
-          TODAY=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
-          FOURTEEN_DAYS_AGO=$(date -u -d "14 days ago" +"%Y-%m-%dT%H:%M:%SZ")
+          TODAY=$(date -u +"%Y-%m-%d")
+          FOURTEEN_DAYS_AGO=$(date -u -d "14 days ago" +"%Y-%m-%d")
 
           echo '<?xml version="1.0" encoding="UTF-8"?>' > new_rss.xml
           echo '<rss version="2.0"><channel>' >> new_rss.xml
@@ -41,31 +41,40 @@ jobs:
           echo '<description>子育てグリーン住宅支援事業の新着情報</description>' >> new_rss.xml
 
           cat news.json | jq -r --arg base_url "$BASE_URL" --arg start_date "$FOURTEEN_DAYS_AGO" --arg end_date "$TODAY" '
-            .list | map(select(.date >= $start_date and .date <= $end_date)) |
+            .list | map(select(.date | gsub("/"; "-") >= $start_date and .date | gsub("/"; "-") <= $end_date)) |
             .[] | 
             "<item><title>\(.title | @html)</title><link>" + 
             (if .url == "" then $base_url else .url end) + 
-            "</link><pubDate>\(.date)</pubDate></item>"' >> new_rss.xml
+            "</link><pubDate>\(.date | gsub("/"; "-"))</pubDate></item>"' >> new_rss.xml
 
           echo '</channel></rss>' >> new_rss.xml
 
+      - name: Ensure RSS file exists
+        run: |
+          if [ ! -f new_rss.xml ]; then
+            echo "No new RSS data found, creating an empty RSS feed."
+            echo '<?xml version="1.0" encoding="UTF-8"?><rss version="2.0"><channel><title>子育てグリーン住宅支援事業ニュース</title><link>https://kosodate-green.mlit.go.jp/</link><description>子育てグリーン住宅支援事業の新着情報</description></channel></rss>' > new_rss.xml
+          fi
+
       - name: Merge new items with previous RSS
         run: |
-          if cmp -s new_rss.xml previous_rss.xml; then
-            echo "No changes in RSS feed. Skipping commit."
-            exit 0
-          else
-            mv new_rss.xml rss.xml
-          fi
+          mv new_rss.xml rss.xml
 
       - name: Commit and Push RSS
         run: |
+          if [ ! -f rss.xml ]; then
+            echo "rss.xml file is missing. Exiting."
+            exit 1
+          fi
+
+          git config --global user.name "github-actions"
+          git config --global user.email "github-actions@github.com"
+
           if git diff --quiet rss.xml; then
             echo "No changes in rss.xml. Skipping commit."
             exit 0
           fi
-          git config --global user.name "github-actions"
-          git config --global user.email "github-actions@github.com"
+
           git add rss.xml
           git commit -m "Updated RSS feed"
           git push
