@@ -4,11 +4,6 @@ on:
     # Run at 10:10 AM Japan time (01:10 UTC)
     - cron: '10 1 * * *'
   workflow_dispatch:  # Allow manual triggering
-  push:
-    branches:
-      - main
-    paths:
-      - 'rss.xml'
 
 permissions:
   contents: write
@@ -32,21 +27,19 @@ jobs:
           # Download the JSON file
           curl -s https://kosodate-green.mlit.go.jp/assets/data/news.json > news.json
           
+          # Debug - Check JSON content
+          echo "JSON content:"
+          cat news.json
+          
           # Get current date in RFC 2822 format for the feed
           BUILD_DATE=$(date -R)
           
           # Calculate date 14 days ago in YYYY/MM/DD format for filtering
           FOURTEEN_DAYS_AGO=$(date -d "14 days ago" +"%Y/%m/%d")
-          
-          # Check if rss.xml exists
-          if [ -f "rss.xml" ]; then
-            echo "Updating existing RSS feed"
-          else
-            echo "Creating new RSS feed"
-          fi
+          echo "Filtering entries from ${FOURTEEN_DAYS_AGO}"
           
           # Create RSS file header
-          cat > rss.xml.new << EOF
+          cat > rss.xml << EOF
 <?xml version="1.0" encoding="UTF-8"?>
 <rss version="2.0" xmlns:atom="http://www.w3.org/2005/Atom">
 <channel>
@@ -58,19 +51,36 @@ jobs:
     <atom:link href="https://${GITHUB_REPOSITORY_OWNER}.github.io/Green-rss/rss.xml" rel="self" type="application/rss+xml" />
 EOF
           
-          # Process JSON and append items to RSS
-          jq -r '.list[] | select(.date >= "'${FOURTEEN_DAYS_AGO}'") | [.id, .title, .date, .url] | @tsv' news.json | 
-          while IFS=$'\t' read -r id title date url; do
+          # Process JSON and append items to RSS - with debugging
+          echo "Processing JSON entries:"
+          
+          # First check if we can parse the JSON properly
+          if ! jq -e '.list' news.json > /dev/null; then
+            echo "Error: Could not parse JSON or 'list' field not found"
+            cat news.json
+            exit 1
+          fi
+          
+          # Get entries and display for debugging
+          ENTRIES=$(jq -r '.list[] | select(.date >= "'${FOURTEEN_DAYS_AGO}'") | [.id, .title, .date, .url] | @tsv' news.json)
+          echo "Filtered entries:"
+          echo "$ENTRIES"
+          
+          echo "$ENTRIES" | while IFS=$'\t' read -r id title date url; do
+            echo "Processing: ID=$id, Title=$title, Date=$date, URL=$url"
+            
             # Skip items with empty URL
             if [ -z "$url" ] || [ "$url" = "null" ]; then
               url="https://kosodate-green.mlit.go.jp/"
+              echo "Empty URL, using default: $url"
             fi
             
             # Convert date to RFC 2822 format for RSS
             rfc_date=$(date -R -d "${date}")
+            echo "Converted date: $rfc_date"
             
             # Create item entry
-            cat >> rss.xml.new << EOF
+            cat >> rss.xml << EOF
     <item>
         <title>${title}</title>
         <link>${url}</link>
@@ -82,41 +92,30 @@ EOF
           done
           
           # Close RSS file
-          cat >> rss.xml.new << EOF
+          cat >> rss.xml << EOF
 </channel>
 </rss>
 EOF
           
-          # Check if the RSS feed has changed
-          if [ -f "rss.xml" ] && diff -q rss.xml rss.xml.new > /dev/null; then
-            echo "No changes detected in RSS feed"
-            rm rss.xml.new
-            exit 0
-          else
-            mv rss.xml.new rss.xml
-            echo "RSS feed updated"
-          fi
+          echo "Generated RSS content:"
+          cat rss.xml
 
       - name: Configure Git
         run: |
           git config user.name "GitHub Actions Bot"
           git config user.email "actions@github.com"
 
-      - name: Commit and push if there are changes
+      - name: Commit and push
         run: |
           git add rss.xml
-          # Check if there are changes to commit
-          if git diff --staged --quiet; then
-            echo "No changes to commit"
-            exit 0
-          else
-            git commit -m "Update RSS feed [skip ci]"
-            git push
-          fi
+          git status
+          
+          # Force commit even if there are no changes
+          git commit -m "Update RSS feed [skip ci]" || echo "No changes to commit"
+          git push || echo "No changes to push"
 
   deploy:
     needs: generate
-    if: success() && github.event_name != 'schedule'
     environment:
       name: github-pages
       url: ${{ steps.deployment.outputs.page_url }}
@@ -133,7 +132,8 @@ EOF
           mkdir -p _site
           echo "/rss.xml" > _site/_headers
           echo "  Content-Type: application/rss+xml; charset=utf-8" >> _site/_headers
-          cp rss.xml _site/
+          cp rss.xml _site/ || echo "rss.xml not found"
+          ls -la
           
       - name: Upload artifact
         uses: actions/upload-pages-artifact@v3
