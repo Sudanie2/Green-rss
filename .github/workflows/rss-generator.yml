@@ -1,100 +1,145 @@
-name: Generate RSS Feed
-
+name: Generate and Publish RSS Feed
 on:
   schedule:
-    - cron: '10 1 * * *'  # 毎日10:10 JST
-  workflow_dispatch:
+    # Run at 10:10 AM Japan time (01:10 UTC)
+    - cron: '10 1 * * *'
+  workflow_dispatch:  # Allow manual triggering
+  push:
+    branches:
+      - main
+    paths:
+      - 'rss.xml'
+
+permissions:
+  contents: write
+  pages: write
+  id-token: write
 
 jobs:
-  build:
+  generate:
     runs-on: ubuntu-latest
-
     steps:
-      - name: Checkout repo
+      - name: Checkout repository
         uses: actions/checkout@v4
-
-      - name: Fetch JSON Data
+        
+      - name: Set up environment
         run: |
-          curl -sL "https://kosodate-green.mlit.go.jp/assets/data/news.json" -o news.json
+          sudo apt-get update
+          sudo apt-get install -y jq curl
 
-      - name: Extract and Filter Recent News
+      - name: Download JSON and Generate RSS
         run: |
-          TODAY=$(date -u +"%Y-%m-%d")
-          DATE_LIMIT=$(date -u -d "-14 days" +"%Y-%m-%d")
-
-          cat news.json | jq -r --arg DATE_LIMIT "$DATE_LIMIT" '
-            .list | map(select(.date >= $DATE_LIMIT)) |
-            map({
-              title: .title,
-              url: .url,
-              date: .date
-            })' > filtered_news.json
-
-      - name: Generate RSS Feed
-        run: |
-          RSS_FILE="rss.xml"
-          PUB_DATE=$(date -R)
-          echo '<?xml version="1.0" encoding="UTF-8"?>' > $RSS_FILE
-          echo '<rss version="2.0">' >> $RSS_FILE
-          echo '<channel>' >> $RSS_FILE
-          echo '<title>子育てグリーン住宅支援事業 - 新着情報</title>' >> $RSS_FILE
-          echo '<link>https://Sudanie2.github.io/Green-rss/rss.xml</link>' >> $RSS_FILE
-          echo '<description>最新の子育てグリーン住宅支援情報を提供</description>' >> $RSS_FILE
-          echo "<pubDate>$PUB_DATE</pubDate>" >> $RSS_FILE
-
-          jq -c '.[]' filtered_news.json | while read item; do
-            TITLE=$(echo "$item" | jq -r '.title')
-            LINK=$(echo "$item" | jq -r '.url')
-            DATE=$(echo "$item" | jq -r '.date')
-            GUID=$(echo "$DATE-$TITLE" | sha256sum | cut -d ' ' -f1)
-            ISO_DATE=$(date -d "$DATE" --rfc-2822)
-
-            echo "<item>" >> $RSS_FILE
-            echo "<title>$TITLE</title>" >> $RSS_FILE
-            echo "<link>$LINK</link>" >> $RSS_FILE
-            echo "<guid isPermaLink=\"false\">$GUID</guid>" >> $RSS_FILE
-            echo "<pubDate>$ISO_DATE</pubDate>" >> $RSS_FILE
-            echo "</item>" >> $RSS_FILE
-          done
-
-          echo '</channel>' >> $RSS_FILE
-          echo '</rss>' >> $RSS_FILE
-
-      - name: Update README.md
-        run: |
-          RSS_LINK='<link rel="alternate" type="application/rss+xml" title="子育てグリーン住宅支援事業 RSS" href="https://Sudanie2.github.io/Green-rss/rss.xml" />'
+          # Download the JSON file
+          curl -s https://kosodate-green.mlit.go.jp/assets/data/news.json > news.json
           
-          if ! grep -q "$RSS_LINK" README.md; then
-            echo "$RSS_LINK" >> README.md
+          # Get current date in RFC 2822 format for the feed
+          BUILD_DATE=$(date -R)
+          
+          # Calculate date 14 days ago in YYYY/MM/DD format for filtering
+          FOURTEEN_DAYS_AGO=$(date -d "14 days ago" +"%Y/%m/%d")
+          
+          # Check if rss.xml exists
+          if [ -f "rss.xml" ]; then
+            echo "Updating existing RSS feed"
+          else
+            echo "Creating new RSS feed"
+          fi
+          
+          # Create RSS file header
+          cat > rss.xml.new << EOF
+<?xml version="1.0" encoding="UTF-8"?>
+<rss version="2.0" xmlns:atom="http://www.w3.org/2005/Atom">
+<channel>
+    <title>子育てグリーン住宅支援事業 新着情報</title>
+    <link>https://kosodate-green.mlit.go.jp/</link>
+    <description>子育てグリーン住宅支援事業のホームページの新着情報</description>
+    <language>ja-jp</language>
+    <lastBuildDate>${BUILD_DATE}</lastBuildDate>
+    <atom:link href="https://${GITHUB_REPOSITORY_OWNER}.github.io/Green-rss/rss.xml" rel="self" type="application/rss+xml" />
+EOF
+          
+          # Process JSON and append items to RSS
+          jq -r '.list[] | select(.date >= "'${FOURTEEN_DAYS_AGO}'") | [.id, .title, .date, .url] | @tsv' news.json | 
+          while IFS=$'\t' read -r id title date url; do
+            # Skip items with empty URL
+            if [ -z "$url" ] || [ "$url" = "null" ]; then
+              url="https://kosodate-green.mlit.go.jp/"
+            fi
+            
+            # Convert date to RFC 2822 format for RSS
+            rfc_date=$(date -R -d "${date}")
+            
+            # Create item entry
+            cat >> rss.xml.new << EOF
+    <item>
+        <title>${title}</title>
+        <link>${url}</link>
+        <guid isPermaLink="false">${id}</guid>
+        <pubDate>${rfc_date}</pubDate>
+        <description>${title}</description>
+    </item>
+EOF
+          done
+          
+          # Close RSS file
+          cat >> rss.xml.new << EOF
+</channel>
+</rss>
+EOF
+          
+          # Check if the RSS feed has changed
+          if [ -f "rss.xml" ] && diff -q rss.xml rss.xml.new > /dev/null; then
+            echo "No changes detected in RSS feed"
+            rm rss.xml.new
+            exit 0
+          else
+            mv rss.xml.new rss.xml
+            echo "RSS feed updated"
           fi
 
-      - name: Check for Changes
-        id: git_diff
+      - name: Configure Git
         run: |
-          git add rss.xml README.md
+          git config user.name "GitHub Actions Bot"
+          git config user.email "actions@github.com"
+
+      - name: Commit and push if there are changes
+        run: |
+          git add rss.xml
+          # Check if there are changes to commit
           if git diff --staged --quiet; then
             echo "No changes to commit"
-            echo "changed=false" >> $GITHUB_ENV
+            exit 0
           else
-            echo "Changes detected"
-            echo "changed=true" >> $GITHUB_ENV
+            git commit -m "Update RSS feed [skip ci]"
+            git push
           fi
 
-      - name: Commit and Push Changes
-        if: env.changed == 'true'
+  deploy:
+    needs: generate
+    if: success() && github.event_name != 'schedule'
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      
+      - name: Setup Pages
+        uses: actions/configure-pages@v4
+        
+      - name: Create _headers file for correct MIME type
         run: |
-          git config --global user.name "github-actions"
-          git config --global user.email "github-actions@github.com"
-          git commit -m "Update RSS feed and README.md" rss.xml README.md
-          git push
-
+          mkdir -p _site
+          echo "/rss.xml" > _site/_headers
+          echo "  Content-Type: application/rss+xml; charset=utf-8" >> _site/_headers
+          cp rss.xml _site/
+          
+      - name: Upload artifact
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: '_site'
+          
       - name: Deploy to GitHub Pages
-        if: env.changed == 'true'
-        run: |
-          mkdir -p public
-          mv rss.xml public/
-          touch public/.nojekyll
-          echo "https://Sudanie2.github.io/Green-rss/rss.xml" > public/CNAME
-          git add public
-          git commit -m "Deploy RSS feed to GitHub Pages"
-          git push
+        id: deployment
+        uses: actions/deploy-pages@v4
