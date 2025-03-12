@@ -18,34 +18,28 @@ jobs:
 
       - name: Process JSON and Generate RSS
         run: |
-          echo '<?xml version="1.0" encoding="UTF-8"?>' > rss.xml
-          echo '<rss version="2.0">' >> rss.xml
-          echo '<channel>' >> rss.xml
-          echo '<title>子育てグリーン住宅支援事業 RSS</title>' >> rss.xml
-          echo '<link>https://kosodate-green.mlit.go.jp/</link>' >> rss.xml
-          echo '<description>子育てグリーン住宅支援事業の最新情報</description>' >> rss.xml
+          mkdir -p public
+          echo '<?xml version="1.0" encoding="UTF-8"?>' > public/rss.xml
+          echo '<rss version="2.0">' >> public/rss.xml
+          echo '<channel>' >> public/rss.xml
+          echo '<title>子育てグリーン住宅支援事業 RSS</title>' >> public/rss.xml
+          echo '<link>https://kosodate-green.mlit.go.jp/</link>' >> public/rss.xml
+          echo '<description>子育てグリーン住宅支援事業の最新情報</description>' >> public/rss.xml
           
           now=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
           fourteen_days_ago=$(date -u -d "-14 days" +"%Y-%m-%d")
           
-          cat news.json | jq -r --arg now "$now" --arg cutoff "$fourteen_days_ago" '.list[] | select(.date >= $cutoff) | "<item><title>" + .title + "</title><link>" + .url + "</link><guid isPermaLink=\"true\">" + .url + "</guid><pubDate>" + .date + "</pubDate></item>"' >> rss.xml
+          cat news.json | jq -r --arg now "$now" --arg cutoff "$fourteen_days_ago" '.list[] | select(.date >= $cutoff) | "<item><title>" + .title + "</title><link>" + .url + "</link><guid isPermaLink=\"true\">" + .url + "</guid><pubDate>" + .date + "</pubDate></item>"' >> public/rss.xml
           
-          echo '</channel>' >> rss.xml
-          echo '</rss>' >> rss.xml
+          echo '</channel>' >> public/rss.xml
+          echo '</rss>' >> public/rss.xml
 
       - name: Create .nojekyll file
         run: |
-          touch .nojekyll
+          touch public/.nojekyll
 
-      - name: Check for changes
-        run: |
-          git diff --quiet || echo "Changes detected"
-
-      - name: Commit and Push if changes exist
-        if: success()
-        run: |
-          git config --global user.name 'github-actions'
-          git config --global user.email 'github-actions@github.com'
-          git add rss.xml .nojekyll
-          git commit -m "Update RSS feed" || exit 0
-          git push origin main
+      - name: Deploy to GitHub Pages
+        uses: peaceiris/actions-gh-pages@v3
+        with:
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          publish_dir: ./public
