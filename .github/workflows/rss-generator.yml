@@ -52,4 +52,49 @@ jobs:
             echo "<item>" >> $RSS_FILE
             echo "<title>$TITLE</title>" >> $RSS_FILE
             echo "<link>$LINK</link>" >> $RSS_FILE
-            echo "<guid isPermaLink=\"false\">$GUID</guid>"
+            echo "<guid isPermaLink=\"false\">$GUID</guid>" >> $RSS_FILE
+            echo "<pubDate>$ISO_DATE</pubDate>" >> $RSS_FILE
+            echo "</item>" >> $RSS_FILE
+          done
+
+          echo '</channel>' >> $RSS_FILE
+          echo '</rss>' >> $RSS_FILE
+
+      - name: Update README.md
+        run: |
+          RSS_LINK='<link rel="alternate" type="application/rss+xml" title="子育てグリーン住宅支援事業 RSS" href="https://Sudanie2.github.io/Green-rss/rss.xml" />'
+          
+          if ! grep -q "$RSS_LINK" README.md; then
+            echo "$RSS_LINK" >> README.md
+          fi
+
+      - name: Check for Changes
+        id: git_diff
+        run: |
+          git add rss.xml README.md
+          if git diff --staged --quiet; then
+            echo "No changes to commit"
+            echo "changed=false" >> $GITHUB_ENV
+          else
+            echo "Changes detected"
+            echo "changed=true" >> $GITHUB_ENV
+          fi
+
+      - name: Commit and Push Changes
+        if: env.changed == 'true'
+        run: |
+          git config --global user.name "github-actions"
+          git config --global user.email "github-actions@github.com"
+          git commit -m "Update RSS feed and README.md" rss.xml README.md
+          git push
+
+      - name: Deploy to GitHub Pages
+        if: env.changed == 'true'
+        run: |
+          mkdir -p public
+          mv rss.xml public/
+          touch public/.nojekyll
+          echo "https://Sudanie2.github.io/Green-rss/rss.xml" > public/CNAME
+          git add public
+          git commit -m "Deploy RSS feed to GitHub Pages"
+          git push
