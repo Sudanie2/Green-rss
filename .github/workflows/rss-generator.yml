@@ -2,7 +2,7 @@ name: Generate RSS Feed
 
 on:
   schedule:
-    - cron: '10 1 * * *'
+    - cron: "10 1 * * *"  # 日本時間 10:10 (UTC 01:10)
   workflow_dispatch:
 
 jobs:
@@ -10,80 +10,46 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      - name: Check out repo
-        uses: actions/checkout@v3
+      - name: Checkout repo
+        uses: actions/checkout@v4
 
-      - name: Generate RSS
+      - name: Fetch JSON data
         run: |
-          set -eux
+          curl -s "https://kosodate-green.mlit.go.jp/assets/data/news.json" -o news.json
 
-          mkdir -p docs
+      - name: Extract latest news (last 14 days)
+        run: |
+          cat news.json | jq -r '(.list | map(select(.date >= "'$(date -d "-14 days" +"%Y/%m/%d")'"))) | {list: .}' > latest.json
 
-          if [ -f docs/rss.xml ]; then
-            mv docs/rss.xml docs/rss_old.xml
-          fi
+      - name: Generate RSS Feed
+        run: |
+          echo '<?xml version="1.0" encoding="UTF-8" ?>' > rss.xml
+          echo '<rss version="2.0">' >> rss.xml
+          echo '<channel>' >> rss.xml
+          echo '<title>子育てグリーン住宅支援 RSS</title>' >> rss.xml
+          echo '<link>https://kosodate-green.mlit.go.jp/</link>' >> rss.xml
+          echo '<description>最新の更新情報</description>' >> rss.xml
+          jq -r '.list[] | "<item><title>\(.title)</title><link>\(.url)</link><pubDate>\(.date)</pubDate><guid isPermaLink=\"false\">\(.id)</guid></item>"' latest.json >> rss.xml
+          echo '</channel></rss>' >> rss.xml
 
-          # JSON を取得
-          curl -s https://kosodate-green.mlit.go.jp/assets/data/news.json -o news.json
+      - name: Check for changes
+        id: check_changes
+        run: |
+          git diff --quiet || echo "changes=true" >> $GITHUB_ENV
 
-          NOW=$(date +%s)
-          # 過去5日間 = 5日 * 86400秒
-          FIVE_DAYS_AGO=$(( NOW - 432000 ))
-
-          : > items.rss
-
-          length=$(jq '.list | length' news.json)
-
-          for i in $(seq 0 $((length - 1))); do
-            item=$(jq -r ".list[$i]" news.json)
-            title=$(echo "$item" | jq -r '.title')
-            url=$(echo "$item"   | jq -r '.url')
-            date_str=$(echo "$item" | jq -r '.date')
-            id=$(echo "$item"    | jq -r '.id')
-
-            # 日付フォーマットの変換
-            date_fmt=$(echo "$date_str" | sed 's/\//-/g')
-            epoch=$(date -d "$date_fmt" +%s)
-
-            # 過去5日以内なら出力
-            if [ $epoch -ge $FIVE_DAYS_AGO ]; then
-              pub_date=$(date -R -d "$date_fmt")
-              cat <<EOF >> items.rss
-<item>
-  <title>${title}</title>
-  <link>${url}</link>
-  <guid isPermaLink="false">${id}</guid>
-  <pubDate>${pub_date}</pubDate>
-</item>
-EOF
-            fi
-          done
-
-          cat <<EOF > docs/rss.xml
-<?xml version="1.0" encoding="UTF-8"?>
-<rss version="2.0">
-<channel>
-  <title>子育てグリーン住宅支援事業 最新情報</title>
-  <link>https://your-github-pages-url.example</link>
-  <description>子育てグリーン住宅支援事業の新着情報をRSSフィードで提供</description>
-  <lastBuildDate>$(date -R)</lastBuildDate>
-  <pubDate>$(date -R)</pubDate>
-  <ttl>1800</ttl>
-$(cat items.rss)
-</channel>
-</rss>
-EOF
-
-          # 変更の有無にかかわらず、rss.xml を生成（差分チェックは任意）
-          git config user.name "github-actions[bot]"
-          git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add docs/rss.xml
+      - name: Commit and push if changed
+        if: env.changes == 'true'
+        run: |
+          git config --global user.name "github-actions"
+          git config --global user.email "github-actions@github.com"
+          git add rss.xml
           git commit -m "Update RSS feed"
-          git push origin main
+          git push
 
-      - name: Upload rss.xml artifact
-        if: always()
-        uses: actions/upload-artifact@v2
+      - name: Deploy to GitHub Pages
+        uses: peaceiris/actions-gh-pages@v3
         with:
-          name: rss.xml
-          path: docs/rss.xml
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          publish_dir: ./
+          destination_dir: docs
+          keep_files: true
