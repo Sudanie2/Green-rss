@@ -2,8 +2,8 @@ name: Generate RSS Feed
 
 on:
   schedule:
-    - cron: '10 1 * * *'  # UTC 01:10 → JST 10:10
-  workflow_dispatch:  # 手動実行用
+    - cron: '10 1 * * *'  # 毎日10:10 JST
+  workflow_dispatch:
 
 jobs:
   build:
@@ -52,42 +52,4 @@ jobs:
             echo "<item>" >> $RSS_FILE
             echo "<title>$TITLE</title>" >> $RSS_FILE
             echo "<link>$LINK</link>" >> $RSS_FILE
-            echo "<guid isPermaLink=\"false\">$GUID</guid>" >> $RSS_FILE
-            echo "<pubDate>$ISO_DATE</pubDate>" >> $RSS_FILE
-            echo "</item>" >> $RSS_FILE
-          done
-
-          echo '</channel>' >> $RSS_FILE
-          echo '</rss>' >> $RSS_FILE
-
-      - name: Check for Changes
-        id: git_diff
-        run: |
-          git add rss.xml
-          if git diff --staged --quiet; then
-            echo "No changes to commit"
-            echo "changed=false" >> $GITHUB_ENV
-          else
-            echo "Changes detected"
-            echo "changed=true" >> $GITHUB_ENV
-          fi
-
-      - name: Commit and Push Changes
-        if: env.changed == 'true'
-        run: |
-          git config --global user.name "github-actions"
-          git config --global user.email "github-actions@github.com"
-          git commit -m "Update RSS feed" rss.xml
-          git push
-
-      - name: Deploy to GitHub Pages
-        if: env.changed == 'true'
-        run: |
-          mkdir -p public
-          mv rss.xml public/
-          touch public/.nojekyll
-          echo "https://Sudanie2.github.io/Green-rss/rss.xml" > public/CNAME
-          git add public
-          git commit -m "Deploy RSS feed to GitHub Pages"
-          git push
-
+            echo "<guid isPermaLink=\"false\">$GUID</guid>"
