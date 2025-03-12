@@ -1,7 +1,5 @@
 name: Generate RSS Feed
 
-# 日本時間10:10に合わせてスケジュール実行する場合は
-# UTCで 1:10 (AM) に設定（JST は UTC+9）
 on:
   schedule:
     - cron: '10 1 * * *'
@@ -12,58 +10,44 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      # リポジトリをチェックアウト
       - name: Check out repo
         uses: actions/checkout@v3
 
-      # JSONを取得し、RSSを生成
       - name: Generate RSS
         run: |
           set -eux
 
-          # リポジトリ直下に docs ディレクトリがなければ作成
           mkdir -p docs
 
-          # 既存のrss.xmlがあればバックアップを取る
           if [ -f docs/rss.xml ]; then
             mv docs/rss.xml docs/rss_old.xml
           fi
 
-          # JSONファイルを取得
+          # JSON を取得
           curl -s https://kosodate-green.mlit.go.jp/assets/data/news.json -o news.json
 
-          # 今のUNIXタイムスタンプ
           NOW=$(date +%s)
-          # 14日(=1209600秒)前のUNIXタイムスタンプ
-          TWO_WEEKS_AGO=$(( NOW - 1209600 ))
+          # 過去5日間 = 5日 * 86400秒
+          FIVE_DAYS_AGO=$(( NOW - 432000 ))
 
-          # いったん空の items.rss を作っておく
           : > items.rss
 
-          # JSONの配列長を取得
           length=$(jq '.list | length' news.json)
 
-          # 各要素をループして14日以内のものだけ抽出
           for i in $(seq 0 $((length - 1))); do
-            # i番目のオブジェクト
             item=$(jq -r ".list[$i]" news.json)
-
             title=$(echo "$item" | jq -r '.title')
             url=$(echo "$item"   | jq -r '.url')
             date_str=$(echo "$item" | jq -r '.date')
             id=$(echo "$item"    | jq -r '.id')
 
-            # date_str (例: "2025/03/10") を "2025-03-10" に置換
+            # 日付フォーマットの変換
             date_fmt=$(echo "$date_str" | sed 's/\//-/g')
-            # UNIXタイムに変換
             epoch=$(date -d "$date_fmt" +%s)
 
-            # 14日以内(または当日含む)の場合のみRSSに入れる
-            if [ $epoch -ge $TWO_WEEKS_AGO ]; then
-              # RFC 2822形式の日付文字列を作成
+            # 過去5日以内なら出力
+            if [ $epoch -ge $FIVE_DAYS_AGO ]; then
               pub_date=$(date -R -d "$date_fmt")
-
-              # RSSの<item>部分を追加
               cat <<EOF >> items.rss
 <item>
   <title>${title}</title>
@@ -75,8 +59,6 @@ EOF
             fi
           done
 
-          # RSS本体の生成
-          # Feedly が認識できるように <lastBuildDate> や <pubDate> を適切に設定
           cat <<EOF > docs/rss.xml
 <?xml version="1.0" encoding="UTF-8"?>
 <rss version="2.0">
@@ -92,22 +74,13 @@ $(cat items.rss)
 </rss>
 EOF
 
-          # 旧ファイルとの差分をチェック
-          if [ -f docs/rss_old.xml ]; then
-            if diff docs/rss_old.xml docs/rss.xml > /dev/null; then
-              echo "No changes in rss.xml. Skipping commit."
-              exit 0
-            fi
-          fi
-
-          # 変更があればコミット＆プッシュ
+          # 変更の有無にかかわらず、rss.xml を生成（差分チェックは任意）
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git add docs/rss.xml
           git commit -m "Update RSS feed"
           git push origin main
 
-      # 生成物をアーティファクトとしてアップロード（任意）
       - name: Upload rss.xml artifact
         if: always()
         uses: actions/upload-artifact@v2
