@@ -2,54 +2,46 @@ name: Generate RSS Feed
 
 on:
   schedule:
-    - cron: "10 1 * * *"  # 日本時間 10:10 (UTC 01:10)
+    - cron: '10 1 * * *' # 日本時間10:10に実行（UTC 01:10）
   workflow_dispatch:
 
 jobs:
   build:
     runs-on: ubuntu-latest
-
     steps:
-      - name: Checkout repo
+      - name: Checkout repository
         uses: actions/checkout@v4
 
       - name: Fetch JSON data
         run: |
           curl -s "https://kosodate-green.mlit.go.jp/assets/data/news.json" -o news.json
 
-      - name: Extract latest news (last 14 days)
+      - name: Process JSON and Generate RSS
         run: |
-          cat news.json | jq -r '(.list | map(select(.date >= "'$(date -d "-14 days" +"%Y/%m/%d")'"))) | {list: .}' > latest.json
-
-      - name: Generate RSS Feed
-        run: |
-          echo '<?xml version="1.0" encoding="UTF-8" ?>' > rss.xml
+          echo '<?xml version="1.0" encoding="UTF-8"?>' > rss.xml
           echo '<rss version="2.0">' >> rss.xml
           echo '<channel>' >> rss.xml
-          echo '<title>子育てグリーン住宅支援 RSS</title>' >> rss.xml
+          echo '<title>子育てグリーン住宅支援事業 RSS</title>' >> rss.xml
           echo '<link>https://kosodate-green.mlit.go.jp/</link>' >> rss.xml
-          echo '<description>最新の更新情報</description>' >> rss.xml
-          jq -r '.list[] | "<item><title>\(.title)</title><link>\(.url)</link><pubDate>\(.date)</pubDate><guid isPermaLink=\"false\">\(.id)</guid></item>"' latest.json >> rss.xml
-          echo '</channel></rss>' >> rss.xml
+          echo '<description>子育てグリーン住宅支援事業の最新情報</description>' >> rss.xml
+          
+          now=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
+          fourteen_days_ago=$(date -u -d "-14 days" +"%Y-%m-%d")
+          
+          cat news.json | jq -r --arg now "$now" --arg cutoff "$fourteen_days_ago" '.list[] | select(.date >= $cutoff) | "<item><title>" + .title + "</title><link>" + .url + "</link><guid isPermaLink=\"true\">" + .url + "</guid><pubDate>" + .date + "</pubDate></item>"' >> rss.xml
+          
+          echo '</channel>' >> rss.xml
+          echo '</rss>' >> rss.xml
 
       - name: Check for changes
-        id: check_changes
         run: |
-          git diff --quiet || echo "changes=true" >> $GITHUB_ENV
+          git diff --quiet || echo "Changes detected"
 
-      - name: Commit and push if changed
-        if: env.changes == 'true'
+      - name: Commit and Push if changes exist
+        if: success()
         run: |
-          git config --global user.name "github-actions"
-          git config --global user.email "github-actions@github.com"
+          git config --global user.name 'github-actions'
+          git config --global user.email 'github-actions@github.com'
           git add rss.xml
-          git commit -m "Update RSS feed"
-          git push
-
-      - name: Deploy to GitHub Pages
-        uses: peaceiris/actions-gh-pages@v3
-        with:
-          github_token: ${{ secrets.GITHUB_TOKEN }}
-          publish_dir: ./
-          destination_dir: docs
-          keep_files: true
+          git commit -m "Update RSS feed" || exit 0
+          git push origin main
