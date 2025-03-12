@@ -16,7 +16,8 @@ jobs:
           fetch-depth: 0
 
       - name: Install dependencies
-        run: sudo apt-get install -y jq
+        run: |
+          sudo apt-get install -y jq
 
       - name: Fetch previous RSS file
         run: |
@@ -30,8 +31,12 @@ jobs:
       - name: Fetch JSON and Convert to RSS
         run: |
           curl -sL "https://kosodate-green.mlit.go.jp/assets/data/news.json" -o news.json
-          cat news.json  # デバッグ用にJSONを出力
 
+          # デバッグ用に JSON の内容を表示
+          echo "Fetched JSON Content:"
+          cat news.json
+
+          # RSS ヘッダー作成
           echo '<?xml version="1.0" encoding="UTF-8"?>' > rss.xml
           echo '<rss version="2.0"><channel>' >> rss.xml
           echo '<title>子育てグリーン住宅支援事業 新着情報</title>' >> rss.xml
@@ -39,13 +44,15 @@ jobs:
           echo '<description>最新のニュースを提供します</description>' >> rss.xml
           echo '<language>ja</language>' >> rss.xml
 
-          cat news.json | jq -c '.list[]' | while read item; do
-            title=$(echo $item | jq -r '.title | @html')
-            link=$(echo $item | jq -r '.url | @html')
-            pubDate=$(echo $item | jq -r '.date' | sed 's/\//-/g' | xargs -I {} date -d {} -R)
-            guid=$(echo $item | jq -r '.id')
+          # JSON から RSS アイテムを作成
+          cat news.json | jq -c '.list[]' | while read -r item; do
+            title=$(echo "$item" | jq -r '.title | @html')
+            link=$(echo "$item" | jq -r '.url | @html')
+            pubDate=$(echo "$item" | jq -r '.date' | sed 's/\//-/g' | xargs -I {} date --date="{}" -R)
+            guid=$(echo "$item" | jq -r '.id')
 
-            if [ -z "$link" ] || [ "$link" = "null" ]; then
+            # URLが空の場合はスキップ（Feedly では必須）
+            if [[ -z "$link" || "$link" == "null" ]]; then
               continue
             fi
 
