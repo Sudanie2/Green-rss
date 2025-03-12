@@ -32,16 +32,9 @@ jobs:
           # 最新のJSONを取得
           curl -sL "https://kosodate-green.mlit.go.jp/assets/data/news.json" -o news.json
 
-          # デバッグ用にJSONの内容を表示（必要に応じてコメントアウト可）
+          # デバッグ用にJSONの内容を表示
           echo "Fetched JSON Content:"
           cat news.json
-
-          # JSONの構造を判別して適切なキーを選択
-          if jq -e 'has("news")' news.json > /dev/null; then
-            JSON_PATH=".news[]"
-          else
-            JSON_PATH=".[]"
-          fi
 
           # RSS ヘッダー作成
           echo '<?xml version="1.0" encoding="UTF-8"?>' > new_rss.xml
@@ -52,11 +45,16 @@ jobs:
           echo '<language>ja</language>' >> new_rss.xml
 
           # JSON から RSS アイテムを作成
-          cat news.json | jq -c "$JSON_PATH" | while read item; do
+          cat news.json | jq -c '.list[]' | while read item; do
             title=$(echo $item | jq -r '.title | @html')
             link=$(echo $item | jq -r '.url | @html')
-            pubDate=$(echo $item | jq -r '.date' | xargs -I {} date -d {} -R) # RFC 2822 形式
-            guid=$(echo $link | md5sum | awk '{print $1}') # URL の MD5 ハッシュで一意の ID を生成
+            pubDate=$(echo $item | jq -r '.date' | sed 's/\//-/g' | xargs -I {} date -d {} -R) # RFC 2822 形式
+            guid=$(echo $item | jq -r '.id')
+
+            # URLが空の場合はスキップ（Feedly では必須）
+            if [ -z "$link" ] || [ "$link" = "null" ]; then
+              continue
+            fi
 
             echo "<item>" >> new_rss.xml
             echo "  <title>${title}</title>" >> new_rss.xml
