@@ -23,6 +23,7 @@ jobs:
           if [ -f rss.xml ]; then
             cp rss.xml previous_rss.xml
           else
+            echo "Previous RSS file not found. Creating an empty placeholder."
             touch previous_rss.xml
           fi
 
@@ -56,9 +57,12 @@ jobs:
 
           echo '</channel></rss>' >> new_rss.xml
 
-      - name: Merge new items with previous RSS
+      - name: Ensure RSS file exists
         run: |
-          if cmp -s new_rss.xml previous_rss.xml; then
+          if [ ! -s previous_rss.xml ]; then
+            echo "Previous RSS file is empty or missing. Creating new RSS file."
+            mv new_rss.xml rss.xml
+          elif cmp -s new_rss.xml previous_rss.xml; then
             echo "No changes in RSS feed. Skipping commit."
             exit 0
           else
