@@ -1,8 +1,8 @@
-name: Generate RSS Feed
+name: Generate RSS Feed for Green Housing Support
 
 on:
   schedule:
-    - cron: "10 1 * * *" # UTC 01:10 = JST 10:10
+    - cron: "10 1 * * *" # 日本時間 10:10 (UTC 01:10)
   workflow_dispatch: # 手動実行も可能
 
 jobs:
@@ -29,13 +29,10 @@ jobs:
           # 最新のJSONを取得
           curl -o news.json https://kosodate-green.mlit.go.jp/assets/data/news.json
 
-          # デバッグ: JSON内容を表示
-          echo "JSON Content:"
-          cat news.json
-
           # 14日以内の記事を抽出
-          TODAY=$(date -u +"%Y-%m-%d")
-          FOURTEEN_DAYS_AGO=$(date -u -d "14 days ago" +"%Y-%m-%d")
+          BASE_URL="https://kosodate-green.mlit.go.jp"
+          TODAY=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
+          FOURTEEN_DAYS_AGO=$(date -u -d "14 days ago" +"%Y-%m-%dT%H:%M:%SZ")
 
           echo '<?xml version="1.0" encoding="UTF-8"?>' > new_rss.xml
           echo '<rss version="2.0"><channel>' >> new_rss.xml
@@ -43,26 +40,12 @@ jobs:
           echo '<link>https://kosodate-green.mlit.go.jp/</link>' >> new_rss.xml
           echo '<description>子育てグリーン住宅支援事業の新着情報</description>' >> new_rss.xml
 
-          # デバッグ: jq で取得した日付一覧
-          echo "Available dates in JSON:"
-          cat news.json | jq -r '.list[] | .date'
-
-          # jq の実行
-          ITEMS=$(cat news.json | jq -r --arg start_date "$FOURTEEN_DAYS_AGO" --arg end_date "$TODAY" '
-            .list |
-            map(select(.date >= $start_date and .date <= $end_date)) |
+          cat news.json | jq -r --arg base_url "$BASE_URL" --arg start_date "$FOURTEEN_DAYS_AGO" --arg end_date "$TODAY" '
+            .list | map(select(.date >= $start_date and .date <= $end_date)) |
             .[] | 
-            "<item><title>\(.title | @html)</title><link>\(.url // "https://kosodate-green.mlit.go.jp/")</link><pubDate>\(.date)</pubDate></item>"')
-
-          # デバッグ: フィルタ後のアイテム数を確認
-          echo "Filtered RSS Items:"
-          echo "$ITEMS"
-
-          if [ -z "$ITEMS" ]; then
-            echo "<item><title>No updates</title><link>https://kosodate-green.mlit.go.jp/</link><pubDate>$TODAY</pubDate></item>" >> new_rss.xml
-          else
-            echo "$ITEMS" >> new_rss.xml
-          fi
+            "<item><title>\(.title | @html)</title><link>" + 
+            (if .url == "" then $base_url else .url end) + 
+            "</link><pubDate>\(.date)</pubDate></item>"' >> new_rss.xml
 
           echo '</channel></rss>' >> new_rss.xml
 
