@@ -30,7 +30,12 @@ jobs:
 
       - name: Fetch JSON and Convert to RSS
         run: |
-          curl -sL "https://kosodate-green.mlit.go.jp/assets/data/news.json" -o news.json
+          curl -fSL "https://kosodate-green.mlit.go.jp/assets/data/news.json" -o news.json
+
+          if [ ! -s news.json ]; then
+            echo "news.json is empty" >&2
+            exit 1
+          fi
 
           # デバッグ用に JSON の内容を表示
           echo "Fetched JSON Content:"
