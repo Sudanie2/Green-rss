@@ -17,7 +17,7 @@ jobs:
 
       - name: Install dependencies
         run: |
-          sudo apt-get install -y jq
+          sudo apt-get install -y jq libxml2-utils
 
       - name: Fetch previous RSS file
         run: |
@@ -75,6 +75,10 @@ jobs:
             echo "❌ rss.xml NOT FOUND!"
             exit 1
           fi
+
+      - name: Validate RSS file
+        run: |
+          xmllint --noout rss.xml
 
       - name: Ensure .nojekyll exists
         run: |
